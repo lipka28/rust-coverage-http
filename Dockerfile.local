@@ -1,0 +1,33 @@
+# Local development Dockerfile - always builds with coverage enabled
+FROM rust:1.83-bookworm AS builder
+
+WORKDIR /build
+
+COPY Cargo.toml ./
+COPY coverage-server/ coverage-server/
+COPY coverage-client/ coverage-client/
+COPY example-app/ example-app/
+
+# Always enable coverage for local builds
+RUN rustup component add llvm-tools-preview && \
+    RUSTFLAGS="-C instrument-coverage" cargo build --release -p example-app
+
+FROM debian:bookworm-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+COPY --from=builder /build/target/release/example-app /app/example-app
+
+ENV APP_PORT=8000
+ENV COVERAGE_PORT=9095
+
+EXPOSE 8000
+EXPOSE 9095
+
+USER 1000:1000
+
+ENTRYPOINT ["/app/example-app"]
