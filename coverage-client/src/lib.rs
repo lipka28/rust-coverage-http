@@ -88,7 +88,12 @@ impl CoverageClient {
             output_dir: output_dir.into(),
             source_dir: None,
             binary_path: None,
-            filters: vec!["coverage_server".to_string()],
+            filters: vec![
+                "coverage-server".to_string(),
+                "coverage_server".to_string(),
+                ".cargo/registry".to_string(),
+                ".rustup/toolchains".to_string(),
+            ],
             llvm_profdata_path: None,
             llvm_cov_path: None,
         }

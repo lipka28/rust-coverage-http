@@ -27,7 +27,7 @@ This project provides a mechanism to collect LLVM-based code coverage from instr
 
 ### How It Works
 
-1. **Build-time**: Compile your Rust app with `-C instrument-coverage` (LLVM inserts profiling counters)
+1. **Build-time**: Compile your Rust app with `RUSTFLAGS="-C instrument-coverage" LLVM_PROFILE_FILE=/dev/null cargo build ...` (LLVM inserts profiling counters)
 2. **Runtime**: The `coverage-server` library starts an HTTP server that serializes coverage data directly from memory using `__llvm_profile_write_buffer()` — no disk I/O, works on fully read-only filesystems
 3. **Test-time**: The `coverage-client` fetches profraw data via HTTP, then uses `llvm-profdata` and `llvm-cov` to generate reports
 
@@ -97,6 +97,28 @@ coverage-client -b ./target/release/my-app report --test-name e2e
 # Or collect and report in one step
 coverage-client -n my-namespace -b ./target/release/my-app \
     collect-and-report --selector app=my-service
+```
+
+**Default report filters:**
+
+Reports automatically exclude files matching these patterns:
+- `coverage_server` / `coverage-server` — the coverage server library itself
+- `.cargo/registry` — third-party crates from crates.io
+- `.rustup/toolchains` — Rust standard library sources
+
+You can override these with `--filter` (replaces all defaults):
+```bash
+# Custom filters (replaces defaults, so re-add any you still want)
+coverage-client -b ./target/release/my-app \
+    --filter 'coverage.server' --filter '.cargo/' --filter '.rustup/toolchains' \
+    --filter 'my_test_utils' \
+    report --test-name e2e
+```
+
+Or via the library:
+```rust
+client.add_filter("my_test_utils");  // adds to defaults
+client.set_filters(vec![...]);       // replaces defaults
 ```
 
 ### example-app
@@ -169,7 +191,7 @@ The coverage server runs as a background tokio task in the same process. It shar
 The coverage server is only useful when the binary is compiled with LLVM instrumentation:
 
 ```bash
-RUSTFLAGS="-C instrument-coverage" cargo build --release
+RUSTFLAGS="-C instrument-coverage" LLVM_PROFILE_FILE=/dev/null cargo build --release
 ```
 
 Without this flag, the LLVM profile symbols won't be linked, and the build will fail. For production builds where you don't want coverage, simply omit the crate or use a Cargo feature to conditionally include it.
@@ -205,10 +227,10 @@ Or use it as a library in your test harness — see the coverage-client section 
 
 ```bash
 # Build with coverage instrumentation
-RUSTFLAGS="-C instrument-coverage" cargo build -p example-app
+RUSTFLAGS="-C instrument-coverage" LLVM_PROFILE_FILE=/dev/null cargo build -p example-app
 
-# Run the app
-COVERAGE_PROFRAW_PATH=/tmp/test.profraw ./target/debug/example-app
+# Run the app (LLVM_PROFILE_FILE=/dev/null suppresses stray .profraw files on exit)
+LLVM_PROFILE_FILE=/dev/null ./target/debug/example-app
 
 # In another terminal, exercise the app
 curl http://localhost:8000/health
@@ -296,7 +318,7 @@ codecov upload-process --file coverage-output/e2e-tests/lcov.info --flag e2e-tes
 - name: Build with coverage
   run: |
     rustup component add llvm-tools-preview
-    RUSTFLAGS="-C instrument-coverage" cargo build --release -p example-app
+    RUSTFLAGS="-C instrument-coverage" LLVM_PROFILE_FILE=/dev/null cargo build --release -p example-app
 
 - name: Deploy and test
   run: |
@@ -320,10 +342,10 @@ codecov upload-process --file coverage-output/e2e-tests/lcov.info --flag e2e-tes
 
 ### LLVM Profile Functions
 
-The coverage server uses three LLVM runtime functions via FFI:
+The coverage server uses three LLVM runtime functions via FFI to collect coverage data **entirely in memory** (no disk I/O):
 
-- `__llvm_profile_set_filename(path)` — Sets where profraw data is written
-- `__llvm_profile_write_file()` — Triggers an immediate profile dump (normally happens at exit)
+- `__llvm_profile_get_size_for_buffer()` — Returns the byte size needed to hold the serialized profile data
+- `__llvm_profile_write_buffer(buf)` — Writes the profraw data into a caller-provided in-memory buffer
 - `__llvm_profile_reset_counters()` — Resets all counters to zero (enables per-test coverage)
 
 These are only available when the binary is compiled with `-C instrument-coverage`.
