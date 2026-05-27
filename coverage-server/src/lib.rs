@@ -2,8 +2,8 @@
 //!
 //! An embedded HTTP server for collecting Rust code coverage from running applications.
 //!
-//! Similar to Go's `runtime/coverage` approach, this library provides an HTTP endpoint
-//! that exposes LLVM coverage profraw data from an instrumented Rust binary at runtime.
+//! This library provides an HTTP endpoint that exposes LLVM coverage profraw data
+//! from an instrumented Rust binary at runtime.
 //!
 //! ## How it works
 //!

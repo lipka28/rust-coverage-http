@@ -1,10 +1,10 @@
 # rust-coverage-http
 
-Collect Rust code coverage from running applications (including in Kubernetes) via HTTP, without `GOCOVERDIR`-style filesystem requirements.
+Collect Rust code coverage from running applications (including in Kubernetes) via HTTP, without filesystem requirements.
 
 ## Overview
 
-This project provides a mechanism to collect LLVM-based code coverage from instrumented Rust binaries at runtime, over HTTP. It's the Rust equivalent of [go-coverage-http](../go-coverage-http/).
+This project provides a mechanism to collect LLVM-based code coverage from instrumented Rust binaries at runtime, over HTTP. See also [go-coverage-http](../go-coverage-http/) for the Go equivalent.
 
 ### Architecture
 
@@ -31,16 +31,16 @@ This project provides a mechanism to collect LLVM-based code coverage from instr
 2. **Runtime**: The `coverage-server` library starts an HTTP server that serializes coverage data directly from memory using `__llvm_profile_write_buffer()` — no disk I/O, works on fully read-only filesystems
 3. **Test-time**: The `coverage-client` fetches profraw data via HTTP, then uses `llvm-profdata` and `llvm-cov` to generate reports
 
-### Key Differences from Go
+### Key Features
 
-| Aspect | Go (go-coverage-http) | Rust (this project) |
-|--------|----------------------|---------------------|
-| Instrumentation | `go build -cover` | `RUSTFLAGS="-C instrument-coverage"` |
-| Runtime API | `runtime/coverage.WriteMeta/WriteCounters` | `__llvm_profile_write_buffer()` via FFI (in-memory) |
-| Output format | Go's binary covmeta + covcounters | LLVM profraw |
-| Report tools | `go tool covdata`, `go tool cover` | `llvm-profdata`, `llvm-cov` |
-| Report formats | Go text coverage, HTML | LCOV, HTML, text summary |
-| Counter reset | Not supported | `__llvm_profile_reset_counters()` |
+| Aspect | Details |
+|--------|---------|
+| Instrumentation | `RUSTFLAGS="-C instrument-coverage"` |
+| Runtime API | `__llvm_profile_write_buffer()` via FFI (fully in-memory, no disk I/O) |
+| Output format | LLVM profraw |
+| Report tools | `llvm-profdata`, `llvm-cov` |
+| Report formats | LCOV, HTML, text summary |
+| Counter reset | `__llvm_profile_reset_counters()` (enables per-test coverage) |
 
 ## Components
 
@@ -360,4 +360,4 @@ These are only available when the binary is compiled with `-C instrument-coverag
 - Requires the instrumented binary on the client machine for `llvm-cov` report generation
 - The binary must match the exact build that's running in the pod
 - LLVM tools version should match the Rust compiler's LLVM version
-- Unlike Go, Rust coverage is binary-level (not source-package-level), so the full binary is needed for reports
+- Rust coverage is binary-level (not source-package-level), so the full binary is needed for reports
