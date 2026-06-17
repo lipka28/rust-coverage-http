@@ -2,8 +2,8 @@
 //!
 //! An embedded HTTP server for collecting Rust code coverage from running applications.
 //!
-//! This library provides an HTTP endpoint that exposes LLVM coverage profraw data
-//! from an instrumented Rust binary at runtime.
+//! Compatible with the [coverport](https://github.com/konflux-ci/coverport) CLI tool
+//! for coverage collection in Kubernetes/CI environments.
 //!
 //! ## How it works
 //!
@@ -26,7 +26,7 @@
 //!
 //! #[tokio::main]
 //! async fn main() {
-//!     let server = CoverageServer::new(9095);
+//!     let server = CoverageServer::new(53700);
 //!     let handle = server.start().await;
 //!     
 //!     // ... run your application ...
@@ -35,7 +35,12 @@
 //! }
 //! ```
 
-use axum::{http::StatusCode, response::IntoResponse, routing::get, Json, Router};
+use axum::{
+    http::{HeaderMap, HeaderValue, StatusCode},
+    response::IntoResponse,
+    routing::get,
+    Json, Router,
+};
 use serde::Serialize;
 use std::env;
 use std::net::SocketAddr;
@@ -77,6 +82,36 @@ fn collect_profraw_in_memory() -> Result<Vec<u8>, String> {
     }
 }
 
+/// Build the standard coverport identification headers.
+/// These allow the coverport CLI to identify this as a coverage server.
+fn coverport_headers() -> HeaderMap {
+    let mut headers = HeaderMap::new();
+    headers.insert("X-Art-Coverage-Server", HeaderValue::from_static("1"));
+    headers.insert(
+        "X-Art-Coverage-Binary",
+        HeaderValue::from_str(&env::current_exe().unwrap_or_default().display().to_string())
+            .unwrap_or_else(|_| HeaderValue::from_static("unknown")),
+    );
+    headers.insert(
+        "X-Art-Coverage-Pid",
+        HeaderValue::from_str(&std::process::id().to_string())
+            .unwrap_or_else(|_| HeaderValue::from_static("0")),
+    );
+
+    if let Ok(commit) = env::var("SOURCE_GIT_COMMIT") {
+        if let Ok(val) = HeaderValue::from_str(&commit) {
+            headers.insert("X-Art-Coverage-Source-Commit", val);
+        }
+    }
+    if let Ok(url) = env::var("SOURCE_GIT_URL") {
+        if let Ok(val) = HeaderValue::from_str(&url) {
+            headers.insert("X-Art-Coverage-Source-Url", val);
+        }
+    }
+
+    headers
+}
+
 #[derive(Debug, Serialize)]
 pub struct CoverageResponse {
     pub profraw_filename: String,
@@ -99,6 +134,7 @@ pub struct CoverageServer {
 impl CoverageServer {
     /// Create a new coverage server on the specified port.
     /// Port can be overridden by the `COVERAGE_PORT` environment variable.
+    /// Default port is 53700 (coverport standard).
     pub fn new(default_port: u16) -> Self {
         let port = env::var("COVERAGE_PORT")
             .ok()
@@ -131,54 +167,70 @@ impl CoverageServer {
     }
 }
 
-async fn handle_coverage() -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)> {
-    let profraw_data = collect_profraw_in_memory().map_err(|e| {
-        error!("Failed to collect profraw data: {}", e);
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse { error: e }),
-        )
-    })?;
+async fn handle_coverage() -> impl IntoResponse {
+    let headers = coverport_headers();
 
-    let size = profraw_data.len();
-    let encoded =
-        base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &profraw_data);
+    let result = collect_profraw_in_memory();
+    match result {
+        Ok(profraw_data) => {
+            let size = profraw_data.len();
+            let encoded = base64::Engine::encode(
+                &base64::engine::general_purpose::STANDARD,
+                &profraw_data,
+            );
 
-    let timestamp = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos() as u64;
+            let timestamp = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos() as u64;
 
-    // Generate a filename based on PID and timestamp for client-side storage
-    let pid = std::process::id();
-    let filename = format!("coverage.{}.{}.profraw", pid, timestamp);
+            let pid = std::process::id();
+            let filename = format!("coverage.{}.{}.profraw", pid, timestamp);
 
-    Ok(Json(CoverageResponse {
-        profraw_filename: filename,
-        profraw_data: encoded,
-        profraw_size: size,
-        timestamp,
-        coverage_enabled: true,
-    }))
+            (
+                StatusCode::OK,
+                headers,
+                Json(CoverageResponse {
+                    profraw_filename: filename,
+                    profraw_data: encoded,
+                    profraw_size: size,
+                    timestamp,
+                    coverage_enabled: true,
+                }),
+            )
+                .into_response()
+        }
+        Err(e) => {
+            error!("Failed to collect profraw data: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                headers,
+                Json(ErrorResponse { error: e }),
+            )
+                .into_response()
+        }
+    }
 }
 
 async fn handle_reset_counters() -> impl IntoResponse {
+    let headers = coverport_headers();
     unsafe {
         __llvm_profile_reset_counters();
     }
     info!("Coverage counters reset");
-    (StatusCode::OK, "Counters reset successfully")
+    (StatusCode::OK, headers, "Counters reset successfully")
 }
 
-async fn handle_health() -> &'static str {
-    "coverage server healthy"
+async fn handle_health() -> impl IntoResponse {
+    let headers = coverport_headers();
+    (StatusCode::OK, headers, "coverage server healthy")
 }
 
 /// Convenience function to start the coverage server with default settings.
-/// Uses port 9095 (or `COVERAGE_PORT` env var).
+/// Uses port 53700 (coverport standard) or `COVERAGE_PORT` env var.
 /// Intended to be called early in main() for set-and-forget usage.
 pub async fn start_coverage_server() -> JoinHandle<()> {
-    let server = CoverageServer::new(9095);
+    let server = CoverageServer::new(53700);
     server.start().await
 }
 
