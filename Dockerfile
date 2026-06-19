@@ -8,7 +8,6 @@ WORKDIR /build
 # Copy workspace
 COPY Cargo.toml ./
 COPY coverage-server/ coverage-server/
-COPY coverage-client/ coverage-client/
 COPY example-app/ example-app/
 
 ARG ENABLE_COVERAGE

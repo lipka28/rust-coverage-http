@@ -12,15 +12,15 @@ This project provides a mechanism to collect LLVM-based code coverage from instr
 ┌──────────────────────────────────────────────────────────────────┐
 │                     Instrumented Application                      │
 │  ┌─────────────────────┐      ┌──────────────────────────────┐   │
-│  │  Your App (:8000)   │      │  Coverage Server (:9095)     │   │
+│  │  Your App (:8000)   │      │  Coverage Server (:53700)    │   │
 │  │  /health, /greet... │      │  /coverage, /health          │   │
 │  └─────────────────────┘      └──────────────────────────────┘   │
 │           LLVM coverage counters (in-memory)                     │
 └──────────────────────────────────┬───────────────────────────────┘
-                                   │ kubectl port-forward (9095)
+                                   │ kubectl port-forward (53700)
                                    ▼
 ┌──────────────────────────────────────────────────────────────────┐
-│                    Coverage Client (local/CI)                     │
+│                       coverport CLI                               │
 │  Collect profraw → llvm-profdata merge → llvm-cov report/html    │
 └──────────────────────────────────────────────────────────────────┘
 ```
@@ -29,7 +29,7 @@ This project provides a mechanism to collect LLVM-based code coverage from instr
 
 1. **Build-time**: Compile your Rust app with `RUSTFLAGS="-C instrument-coverage" LLVM_PROFILE_FILE=/dev/null cargo build ...` (LLVM inserts profiling counters)
 2. **Runtime**: The `coverage-server` library starts an HTTP server that serializes coverage data directly from memory using `__llvm_profile_write_buffer()` — no disk I/O, works on fully read-only filesystems
-3. **Test-time**: The `coverage-client` fetches profraw data via HTTP, then uses `llvm-profdata` and `llvm-cov` to generate reports
+3. **Test-time**: [coverport](https://github.com/konflux-ci/coverport) fetches profraw data via HTTP, then uses `llvm-profdata` and `llvm-cov` to generate reports
 
 ### Key Features
 
@@ -53,7 +53,7 @@ use coverage_server::CoverageServer;
 
 #[tokio::main]
 async fn main() {
-    // Start coverage server on port 9095 (or COVERAGE_PORT env var)
+    // Start coverage server on port 53700 (or COVERAGE_PORT env var)
     let _handle = coverage_server::start_coverage_server().await;
     
     // ... your application code ...
@@ -65,61 +65,24 @@ async fn main() {
 - `GET/POST /coverage/reset` — Resets coverage counters (for per-test coverage)
 - `GET /health` — Health check
 
-### coverage-client (library + CLI)
+### Coverage collection with coverport
 
-Collects coverage from pods and generates reports.
+[coverport](https://github.com/konflux-ci/coverport) is a multi-language coverage collection CLI that handles the full pipeline: discover pods, collect profraw over HTTP, merge, generate reports, and upload to Codecov.
 
-**As a library:**
-```rust
-use coverage_client::CoverageClient;
-
-let mut client = CoverageClient::new("my-namespace", "./coverage-output");
-client.set_binary_path("./target/release/my-app");
-client.set_source_dir("./");
-
-// Collect from a pod
-let pod = client.get_pod_name("app=my-service")?;
-client.collect_from_pod(&pod, "e2e-tests", 9095).await?;
-
-// Generate reports
-client.process_reports("e2e-tests")?;
-```
-
-**As a CLI:**
 ```bash
-# Collect coverage from a pod
-coverage-client -n my-namespace -b ./target/release/my-app \
-    collect --selector app=my-service --test-name e2e
+# Collect from a running app (local or via URL)
+coverport collect --url http://localhost:53700/coverage --test-name e2e -o ./coverage-output
 
-# Generate reports from collected data
-coverage-client -b ./target/release/my-app report --test-name e2e
+# Collect from Kubernetes pods
+coverport collect -n my-namespace -l app=my-service --test-name e2e -o ./coverage-output
 
-# Or collect and report in one step
-coverage-client -n my-namespace -b ./target/release/my-app \
-    collect-and-report --selector app=my-service
+# Process into reports (LCOV, text summary, optional HTML)
+COVERAGE_BINARY=./target/release/my-app coverport process \
+    --coverage-dir=./coverage-output --format=rust --generate-html \
+    --skip-clone --upload=false
 ```
 
-**Default report filters:**
-
-Reports automatically exclude files matching these patterns:
-- `coverage_server` / `coverage-server` — the coverage server library itself
-- `.cargo/registry` — third-party crates from crates.io
-- `.rustup/toolchains` — Rust standard library sources
-
-You can override these with `--filter` (replaces all defaults):
-```bash
-# Custom filters (replaces defaults, so re-add any you still want)
-coverage-client -b ./target/release/my-app \
-    --filter 'coverage.server' --filter '.cargo/' --filter '.rustup/toolchains' \
-    --filter 'my_test_utils' \
-    report --test-name e2e
-```
-
-Or via the library:
-```rust
-client.add_filter("my_test_utils");  // adds to defaults
-client.set_filters(vec![...]);       // replaces defaults
-```
+coverport auto-detects Rust by the `profraw_data` field in the JSON response.
 
 ### example-app
 
@@ -127,7 +90,7 @@ Demo HTTP application showing integration with coverage-server.
 
 ## Integrating with Your Application
 
-The `coverage-server` crate is the only piece you embed in your application. The `coverage-client` is a separate tool that runs externally (on your laptop, in CI) to collect and process the data — it is never a dependency of your app.
+The `coverage-server` crate is the only piece you embed in your application. Coverage collection and report generation is handled externally by [coverport](https://github.com/konflux-ci/coverport).
 
 ### Adding the dependency
 
@@ -170,7 +133,7 @@ Add a single line to your `main()` — works with any async runtime (axum, actix
 ```rust
 #[tokio::main]
 async fn main() {
-    // Starts coverage HTTP server on port 9095 in the background.
+    // Starts coverage HTTP server on port 53700 in the background.
     // Returns immediately — does not block your app.
     let _coverage_handle = coverage_server::start_coverage_server().await;
 
@@ -184,7 +147,7 @@ async fn main() {
 }
 ```
 
-The coverage server runs as a background tokio task in the same process. It shares the LLVM coverage counters with your app but uses a separate port (9095), so there is zero interference with your application's routes or logic.
+The coverage server runs as a background tokio task in the same process. It shares the LLVM coverage counters with your app but uses a separate port (53700), so there is zero interference with your application's routes or logic.
 
 ### Building with coverage instrumentation
 
@@ -198,21 +161,20 @@ Without this flag, the LLVM profile symbols won't be linked, and the build will 
 
 ### Collecting coverage (external — not part of your app)
 
-The `coverage-client` runs separately on the machine where you want the reports:
+Use [coverport](https://github.com/konflux-ci/coverport) to collect and process coverage:
 
 ```bash
-# Install or build the client
-cargo install --git https://github.com/your-org/rust-coverage.git coverage-client
+# Collect from a running app
+coverport collect --url http://localhost:53700/coverage --test-name e2e -o ./coverage-output
 
-# Collect from a running pod
-coverage-client -n my-namespace -b ./target/release/my-app \
-    collect --selector app=my-service
+# Or collect from Kubernetes pods
+coverport collect -n my-namespace -l app=my-service --test-name e2e -o ./coverage-output
 
-# Generate reports
-coverage-client -b ./target/release/my-app report
+# Process into reports (LCOV, text summary, HTML)
+COVERAGE_BINARY=./target/release/my-app coverport process \
+    --coverage-dir=./coverage-output --format=rust --generate-html \
+    --skip-clone --upload=false
 ```
-
-Or use it as a library in your test harness — see the coverage-client section above.
 
 ## Quick Start
 
@@ -237,19 +199,16 @@ curl http://localhost:8000/health
 curl http://localhost:8000/greet?name=World
 curl "http://localhost:8000/calculate?a=5&b=3"
 
-# Collect coverage
-curl -X POST http://localhost:9095/coverage | jq .
+# Collect coverage with coverport
+coverport collect --url http://localhost:53700/coverage --test-name local-test -o ./coverage-output
 
-# Or use the client CLI
-cargo run -p coverage-client -- \
-    -b ./target/debug/example-app \
-    -o ./coverage-output \
-    collect-url --url http://localhost:9095/coverage --test-name local-test
+# Process into reports
+COVERAGE_BINARY=./target/debug/example-app coverport process \
+    --coverage-dir=./coverage-output --format=rust --generate-html \
+    --skip-clone --upload=false
 
-cargo run -p coverage-client -- \
-    -b ./target/debug/example-app \
-    -o ./coverage-output \
-    report --test-name local-test
+# View the HTML report
+xdg-open ./coverage-output/local-test/html/index.html
 ```
 
 ### Kubernetes (Kind)
@@ -274,18 +233,22 @@ kubectl wait --for=condition=ready pod -l app=rust-coverage-demo -n coverage-dem
 curl http://localhost:8000/health
 curl http://localhost:8000/greet?name=Rust
 
-# Collect coverage via the client
-cargo run -p coverage-client -- \
-    -n coverage-demo \
-    -b ./target/release/example-app \
-    collect --selector app=rust-coverage-demo --test-name e2e
+# Collect coverage
+coverport collect -n coverage-demo -l app=rust-coverage-demo --test-name e2e -o ./coverage-output
+
+# Process into reports
+COVERAGE_BINARY=./target/release/example-app coverport process \
+    --coverage-dir=./coverage-output --format=rust --generate-html \
+    --skip-clone --upload=false
 ```
 
 ## Environment Variables
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `COVERAGE_PORT` | `9095` | Port for the coverage HTTP server |
+| `COVERAGE_PORT` | `53700` | Port for the coverage HTTP server |
+| `COVERAGE_BINARY` | — | Path to instrumented binary (used by coverport for report generation) |
+| `LLVM_PROFILE_FILE` | — | Set to `/dev/null` to suppress stray `.profraw` files during build/run |
 | `APP_PORT` | `8000` | Application HTTP port (example-app only) |
 | `RUST_LOG` | — | Log level filter (e.g. `info`, `debug`) |
 
@@ -326,16 +289,14 @@ codecov upload-process --file coverage-output/e2e-tests/lcov.info --flag e2e-tes
     
 - name: Collect coverage
   run: |
-    cargo run -p coverage-client -- \
-      -n coverage-demo \
-      -b ./target/release/example-app \
-      collect-and-report --selector app=my-app --test-name e2e
+    coverport collect -n coverage-demo -l app=my-app --test-name e2e -o ./coverage-output
 
-- name: Upload coverage
-  uses: codecov/codecov-action@v4
-  with:
-    files: ./coverage-output/e2e/lcov.info
-    flags: e2e-tests
+- name: Process and upload coverage
+  run: |
+    COVERAGE_BINARY=./target/release/example-app coverport process \
+      --coverage-dir=./coverage-output --format=rust \
+      --codecov-token=${{ secrets.CODECOV_TOKEN }} \
+      --codecov-flags=e2e-tests
 ```
 
 ## Technical Details
@@ -353,7 +314,7 @@ These are only available when the binary is compiled with `-C instrument-coverag
 ### Security Considerations
 
 - The coverage endpoint has **no authentication** — only use in test environments
-- Never expose port 9095 in production
+- Never expose port 53700 in production
 
 ### Limitations
 

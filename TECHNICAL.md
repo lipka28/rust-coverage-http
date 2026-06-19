@@ -62,7 +62,7 @@ The coverage server starts as a separate async task within the same process:
 
 ```
 main()
-  ├── start_coverage_server()  →  tokio::spawn(HTTP server on :9095)
+  ├── start_coverage_server()  →  tokio::spawn(HTTP server on :53700)
   └── start_app_server()       →  axum::serve(app on :8000)
 ```
 
@@ -94,19 +94,22 @@ Test B starts → exercises code → collect coverage → reset
 
 LLVM's profile runtime is thread-safe. The counter increments use atomic operations (since Rust defaults to `-C instrument-coverage` which implies atomic counters for multi-threaded programs).
 
-## Coverage Client Architecture
+## Coverage Collection (coverport)
+
+Collection and report generation is handled by [coverport](https://github.com/konflux-ci/coverport), a multi-language coverage CLI.
 
 ### Collection Flow
 
 ```
-1. Pod Discovery
-   kubectl get pods -n <ns> -l <selector> --field-selector=status.phase=Running
+1. Pod Discovery (or direct URL)
+   coverport collect -n <ns> -l <selector>
+   coverport collect --url http://localhost:53700/coverage
 
-2. Port Forward
+2. Port Forward (automatic for K8s)
    kubectl port-forward pod/<name> 0:<target-port>
    
 3. HTTP Request
-   POST http://127.0.0.1:<local-port>/coverage
+   GET http://127.0.0.1:<local-port>/coverage
    
 4. Response Processing
    JSON → base64 decode → save .profraw file
@@ -118,6 +121,8 @@ LLVM's profile runtime is thread-safe. The counter increments use atomic operati
 ### Report Generation
 
 ```
+coverport process --coverage-dir=./coverage-output --format=rust
+
 1. Merge (llvm-profdata merge --sparse *.profraw -o coverage.profdata)
    Combines multiple profraw files into a single indexed profile
 
@@ -131,15 +136,7 @@ LLVM's profile runtime is thread-safe. The counter increments use atomic operati
    Industry-standard format for CI tools (Codecov, Coveralls, SonarCloud)
 ```
 
-### LLVM Tool Discovery
-
-The client searches for `llvm-profdata` and `llvm-cov` in this order:
-
-1. Custom path (if `set_llvm_profdata_path()` / `set_llvm_cov_path()` was called)
-2. Direct name in PATH (`llvm-profdata`, `llvm-cov`)
-3. Versioned names (`llvm-profdata-20`, `llvm-profdata-19`, ..., `llvm-profdata-14`)
-4. Rust toolchain path (`$RUSTUP_HOME/toolchains/*/lib/rustlib/*/bin/`)
-5. cargo-binutils aliases (`rust-profdata`, `rust-cov`)
+The instrumented binary must be available locally (via `COVERAGE_BINARY` env var or auto-discovered in `target/`).
 
 ## Comparison with Traditional Approaches
 

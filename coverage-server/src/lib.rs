@@ -58,6 +58,21 @@ extern "C" {
 
     /// Resets all coverage counters to zero.
     fn __llvm_profile_reset_counters();
+
+    /// Sets the filename for the default atexit profile dump.
+    /// Setting to "/dev/null" effectively disables disk writes on exit.
+    fn __llvm_profile_set_filename(filename: *const std::ffi::c_char);
+}
+
+/// Disable the LLVM default atexit handler that writes profraw to disk.
+/// This must be called early to ensure no filesystem writes occur,
+/// which is critical for read-only root filesystem environments.
+pub fn disable_profile_atexit_write() {
+    unsafe {
+        let devnull = std::ffi::CString::new("/dev/null").unwrap();
+        __llvm_profile_set_filename(devnull.as_ptr());
+    }
+    info!("Disabled LLVM profile atexit disk write (redirected to /dev/null)");
 }
 
 /// Serialize LLVM profile data directly into an in-memory buffer.
@@ -147,6 +162,8 @@ impl CoverageServer {
     /// Start the coverage server in a background task.
     /// Returns a JoinHandle that can be awaited if needed.
     pub async fn start(self) -> JoinHandle<()> {
+        disable_profile_atexit_write();
+
         let app = Router::new()
             .route("/coverage", get(handle_coverage).post(handle_coverage))
             .route(

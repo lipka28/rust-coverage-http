@@ -1,7 +1,6 @@
 [workspace]
 members = [
     "coverage-server",
-    "coverage-client",
     "example-app",
 ]
 resolver = "2"
