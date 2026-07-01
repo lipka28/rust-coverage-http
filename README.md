@@ -41,22 +41,20 @@ This project provides a mechanism to collect LLVM-based code coverage from instr
 | Report tools | `llvm-profdata`, `llvm-cov` |
 | Report formats | LCOV, HTML, text summary |
 | Counter reset | `__llvm_profile_reset_counters()` (enables per-test coverage) |
+| Runtime | Framework-agnostic — works with any async runtime or synchronous apps |
 
 ## Components
 
 ### coverage-server (library)
 
-Embedded HTTP server to add to your instrumented binary:
+Embedded HTTP server to add to your instrumented binary. Works with any application — no specific async runtime required:
 
 ```rust
-use coverage_server::CoverageServer;
+fn main() {
+    #[cfg(feature = "coverage")]
+    let _handle = coverage_server::start_coverage_server_standalone(53700);
 
-#[tokio::main]
-async fn main() {
-    // Start coverage server on port 53700 (or COVERAGE_PORT env var)
-    let _handle = coverage_server::start_coverage_server().await;
-    
-    // ... your application code ...
+    // ... rest of your application, any framework, any runtime ...
 }
 ```
 
@@ -96,68 +94,64 @@ The `coverage-server` crate is the only piece you embed in your application. Cov
 
 Choose whichever method suits your setup:
 
-**Git dependency** (simplest — no publishing step, just push this repo to GitHub):
+Add `coverage-server` as an optional dependency behind a feature flag:
 
 ```toml
+[features]
+coverage = ["dep:coverage-server"]
+
 [dependencies]
-coverage-server = { git = "https://github.com/your-org/rust-coverage.git", subdirectory = "coverage-server" }
-tokio = { version = "1", features = ["full"] }
+coverage-server = { git = "https://github.com/lipka28/rust-coverage-http.git", subdirectory = "coverage-server", optional = true }
 ```
 
 You can pin to a branch or tag:
 
 ```toml
-coverage-server = { git = "https://github.com/your-org/rust-coverage.git", tag = "v0.1.0", subdirectory = "coverage-server" }
+coverage-server = { git = "https://github.com/lipka28/rust-coverage-http.git", tag = "v0.1.0", subdirectory = "coverage-server", optional = true }
 ```
 
-**crates.io** (if/when the crate is published):
+Other source options:
 
 ```toml
-[dependencies]
-coverage-server = "0.1"
-tokio = { version = "1", features = ["full"] }
+# crates.io (if/when the crate is published)
+coverage-server = { version = "0.1", optional = true }
+
+# Path or git submodule (for monorepos or vendored setups)
+coverage-server = { path = "vendor/rust-coverage/coverage-server", optional = true }
 ```
 
-**Path or git submodule** (for monorepos or vendored setups):
-
-```toml
-[dependencies]
-coverage-server = { path = "vendor/rust-coverage/coverage-server" }
-tokio = { version = "1", features = ["full"] }
-```
+No additional dependencies (like tokio) are needed — the standalone server brings its own runtime.
 
 ### Minimal integration
 
-Add a single line to your `main()` — works with any async runtime (axum, actix-web, tonic, plain tokio):
+Add two lines to your `main()` — works with any application, any framework, any async runtime (or none):
 
 ```rust
-#[tokio::main]
-async fn main() {
-    // Starts coverage HTTP server on port 53700 in the background.
-    // Returns immediately — does not block your app.
-    let _coverage_handle = coverage_server::start_coverage_server().await;
+fn main() {
+    #[cfg(feature = "coverage")]
+    let _coverage = coverage_server::start_coverage_server_standalone(53700);
 
     // The rest of your application is completely unchanged.
-    // Example: an axum web server
-    let app = axum::Router::new()
-        .route("/", axum::routing::get(|| async { "Hello" }));
-
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:8000").await.unwrap();
-    axum::serve(listener, app).await.unwrap();
+    // Works with axum, actix-web, tonic, synchronous apps, CLI tools, etc.
 }
 ```
 
-The coverage server runs as a background tokio task in the same process. It shares the LLVM coverage counters with your app but uses a separate port (53700), so there is zero interference with your application's routes or logic.
+The coverage server spawns on its own background thread with its own tokio runtime. It shares the LLVM coverage counters with your app but uses a separate port (53700), so there is zero interference with your application's logic.
+
 
 ### Building with coverage instrumentation
 
-The coverage server is only useful when the binary is compiled with LLVM instrumentation:
+The coverage server requires both the `coverage` feature flag and LLVM instrumentation:
 
 ```bash
-RUSTFLAGS="-C instrument-coverage" LLVM_PROFILE_FILE=/dev/null cargo build --release
+# Production build (no coverage, coverage-server not even compiled)
+cargo build --release
+
+# Coverage-instrumented build (for test environments)
+RUSTFLAGS="-C instrument-coverage" LLVM_PROFILE_FILE=/dev/null cargo build --release --features coverage
 ```
 
-Without this flag, the LLVM profile symbols won't be linked, and the build will fail. For production builds where you don't want coverage, simply omit the crate or use a Cargo feature to conditionally include it.
+Without `-C instrument-coverage`, the LLVM profile symbols won't be linked. Without `--features coverage`, the coverage-server dependency is not included at all.
 
 ### Collecting coverage (external — not part of your app)
 

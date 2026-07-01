@@ -34,10 +34,10 @@ WORKDIR /app
 COPY --from=builder /build/target/release/example-app /app/example-app
 
 ENV APP_PORT=8000
-ENV COVERAGE_PORT=9095
+ENV COVERAGE_PORT=53700
 
 EXPOSE 8000
-EXPOSE 9095
+EXPOSE 53700
 
 USER 1000:1000
 

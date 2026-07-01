@@ -58,15 +58,16 @@ Instrumented Binary
 
 ### Initialization
 
-The coverage server starts as a separate async task within the same process:
+The coverage server can start in two ways:
 
+**Standalone mode** (recommended — works with any app):
 ```
 main()
-  ├── start_coverage_server()  →  tokio::spawn(HTTP server on :53700)
-  └── start_app_server()       →  axum::serve(app on :8000)
+  ├── start_coverage_server_standalone(53700)  →  std::thread::spawn(own tokio runtime → HTTP server on :53700)
+  └── app logic                           →  any framework, any runtime
 ```
 
-Both share the same process memory, including LLVM coverage counters.
+Both the application and the coverage server share the same process memory, including LLVM coverage counters.
 
 ### Request Handling (`/coverage`) — Fully In-Memory
 
@@ -192,7 +193,7 @@ The Dockerfile supports both modes:
 - **Production** (`ENABLE_COVERAGE=false`): Standard optimized build, no coverage overhead
 - **Test** (`ENABLE_COVERAGE=true`): Instrumented build with ~10-20% runtime overhead
 
-The coverage server code is always compiled in, but the LLVM FFI functions (`__llvm_profile_*`) are only present when `-C instrument-coverage` is active. If the binary is not instrumented, the FFI calls will cause a link error — so the server is only functional in instrumented builds.
+The `coverage-server` crate is gated behind a Cargo feature (`coverage`). When the feature is disabled, the dependency is not compiled at all, producing a clean production binary. When enabled, the LLVM FFI functions (`__llvm_profile_*`) must be present (via `-C instrument-coverage`), or linking will fail.
 
 ### Binary Size Impact
 

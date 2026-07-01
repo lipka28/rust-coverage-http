@@ -27,13 +27,13 @@ spec:
           ports:
             - containerPort: 8000
               name: http
-            - containerPort: 9095
+            - containerPort: 53700
               name: coverage
           env:
             - name: APP_PORT
               value: "8000"
             - name: COVERAGE_PORT
-              value: "9095"
+              value: "53700"
             - name: RUST_LOG
               value: "info"
           resources:
@@ -76,6 +76,6 @@ spec:
       targetPort: 8000
       nodePort: 30080
     - name: coverage
-      port: 9095
-      targetPort: 9095
+      port: 53700
+      targetPort: 53700
       nodePort: 30095
