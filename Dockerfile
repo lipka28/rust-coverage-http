@@ -16,7 +16,7 @@ ARG ENABLE_COVERAGE
 RUN if [ "$ENABLE_COVERAGE" = "true" ]; then \
         echo "Building with coverage instrumentation"; \
         rustup component add llvm-tools-preview; \
-        RUSTFLAGS="-C instrument-coverage" cargo build --release -p example-app; \
+        RUSTFLAGS="-C instrument-coverage" cargo build --release -p example-app --features coverage; \
     else \
         echo "Building without coverage (production)"; \
         cargo build --release -p example-app; \

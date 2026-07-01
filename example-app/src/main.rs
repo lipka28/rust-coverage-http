@@ -14,8 +14,8 @@ struct GreetParams {
 }
 
 #[derive(Serialize)]
-struct GreetResponse {
-    message: String,
+struct StringResponse {
+    string: String,
 }
 
 #[derive(Deserialize)]
@@ -41,7 +41,7 @@ async fn health() -> Json<HealthResponse> {
     })
 }
 
-async fn greet(Query(params): Query<GreetParams>) -> Result<Json<GreetResponse>, impl IntoResponse> {
+async fn greet(Query(params): Query<GreetParams>) -> Result<Json<StringResponse>, impl IntoResponse> {
     let name = params.name.unwrap_or_default();
 
     if name.is_empty() {
@@ -68,7 +68,7 @@ async fn greet(Query(params): Query<GreetParams>) -> Result<Json<GreetResponse>,
         format!("Hello, {}!", name)
     };
 
-    Ok(Json(GreetResponse { message }))
+    Ok(Json(StringResponse { string: message }))
 }
 
 async fn calculate(
@@ -106,20 +106,26 @@ async fn calculate(
     }))
 }
 
+async fn useless() -> Json<StringResponse> {
+    Json(StringResponse {
+        string: "This is a useless route".to_string(),
+    })
+}
+
 #[tokio::main]
 async fn main() {
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::from_default_env())
         .init();
 
-    // Start the coverage server on a separate port (only functional when
-    // compiled with -C instrument-coverage)
+    #[cfg(feature = "coverage")]
     let _coverage_handle = coverage_server::start_coverage_server().await;
 
     let app = Router::new()
         .route("/health", get(health))
         .route("/greet", get(greet))
-        .route("/calculate", get(calculate));
+        .route("/calculate", get(calculate))
+        .route("/useless", get(useless));
 
     let port: u16 = std::env::var("APP_PORT")
         .ok()
