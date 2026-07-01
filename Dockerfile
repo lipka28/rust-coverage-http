@@ -1,7 +1,7 @@
 ARG ENABLE_COVERAGE=false
 
 # Build stage
-FROM rust:1.83-bookworm AS builder
+FROM rust:1.96.1-bookworm AS builder
 
 WORKDIR /build
 

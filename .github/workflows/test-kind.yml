@@ -1,0 +1,124 @@
+name: E2E Tests with Kind
+
+on:
+  push:
+  pull_request_target:
+
+jobs:
+  test-e2e:
+    name: Rust Coverage E2E
+    runs-on: ubuntu-latest
+    steps:
+      - name: Clone the code
+        uses: actions/checkout@v5
+        with:
+          ref: "${{ github.event.pull_request.head.sha || github.sha }}"
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+
+      - name: Add Rust LLVM tools to PATH
+        run: |
+          LLVM_TOOLS_DIR="$(rustc --print sysroot)/lib/rustlib/$(rustc -vV | sed -n 's/host: //p')/bin"
+          echo "LLVM tools directory: $LLVM_TOOLS_DIR"
+          ls "$LLVM_TOOLS_DIR"/llvm-{profdata,cov} 2>/dev/null || true
+          echo "$LLVM_TOOLS_DIR" >> $GITHUB_PATH
+
+      - name: Setup Go (for building coverport)
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+
+      - name: Build coverport CLI from PR branch
+        run: |
+          git clone --depth 1 --branch rust-coverage \
+            https://github.com/lipka28/coverport.git /tmp/coverport
+          cd /tmp/coverport/cli
+          go build -o /usr/local/bin/coverport .
+          coverport --help
+
+      - name: Build example-app with coverage
+        run: |
+          docker build -t rust-coverage-demo:latest -f Dockerfile.local .
+
+      - name: Extract instrumented binary from Docker image
+        run: |
+          docker create --name extract rust-coverage-demo:latest
+          docker cp extract:/app/example-app ./instrumented-binary
+          docker rm extract
+          file ./instrumented-binary
+
+      - name: Create KinD Cluster
+        uses: helm/kind-action@v1.10.0
+        with:
+          cluster_name: kind
+          config: kind-config.yaml
+
+      - name: Load image into KinD cluster
+        run: |
+          kind load docker-image rust-coverage-demo:latest
+
+      - name: Deploy application
+        run: |
+          kubectl apply -f k8s-deployment.yaml
+
+          kubectl wait --for=condition=Available deployment/rust-coverage-demo \
+            -n coverage-demo --timeout=120s
+
+          kubectl wait --for=condition=Ready pod -l app=rust-coverage-demo \
+            -n coverage-demo --timeout=60s
+
+          echo "Waiting for service to be accessible..."
+          for i in {1..30}; do
+            if curl -sf http://127.0.0.1:8000/health 2>/dev/null; then
+              echo "Service is accessible!"
+              break
+            fi
+            echo "Attempt $i: Service not ready yet, retrying..."
+            sleep 2
+          done
+
+          curl -v http://127.0.0.1:8000/health
+
+      - name: Exercise the application
+        run: |
+          curl -sf http://127.0.0.1:8000/health
+          curl -sf "http://127.0.0.1:8000/greet?name=CI"
+          curl -sf "http://127.0.0.1:8000/calculate?a=10&b=5"
+
+      - name: Collect coverage with coverport
+        run: |
+          coverport collect \
+            --url http://127.0.0.1:9095/coverage \
+            --test-name e2e \
+            -o ./coverage-output
+
+      - name: Process coverage reports with coverport
+        run: |
+          COVERAGE_BINARY=./instrumented-binary coverport process \
+            --coverage-dir=./coverage-output \
+            --format=rust \
+            --generate-html \
+            --repo-url=https://github.com/${{ github.repository }} \
+            --commit-sha=${{ github.event.pull_request.head.sha || github.sha }} \
+            --workspace=./coverport-workspace \
+            --keep-workspace \
+            --upload=false
+
+      - name: Display coverage summary
+        run: |
+          echo "=== Generated files ==="
+          find ./coverage-output ./coverport-workspace -type f 2>/dev/null | sort
+          echo ""
+          echo "=== Coverage Report ==="
+          cat ./coverport-workspace/coverage.out 2>/dev/null || true
+
+      - name: Upload E2E coverage to Codecov
+        uses: codecov/codecov-action@v4
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: ./coverport-workspace/coverage.out
+          flags: e2e-tests
+          fail_ci_if_error: false
