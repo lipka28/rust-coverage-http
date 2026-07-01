@@ -9,7 +9,7 @@ COPY example-app/ example-app/
 
 # Always enable coverage for local builds
 RUN rustup component add llvm-tools-preview && \
-    RUSTFLAGS="-C instrument-coverage" cargo build --release -p example-app
+    RUSTFLAGS="-C instrument-coverage" cargo build --release -p example-app --features coverage
 
 FROM debian:bookworm-slim
 

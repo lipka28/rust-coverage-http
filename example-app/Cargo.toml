@@ -5,9 +5,12 @@ edition = "2021"
 description = "Example application demonstrating coverage-server integration"
 license = "Apache-2.0"
 
+[features]
+coverage = ["dep:coverage-server"]
+
 [dependencies]
 axum = "0.8"
-coverage-server = { path = "../coverage-server" }
+coverage-server = { path = "../coverage-server", optional = true }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["full"] }
