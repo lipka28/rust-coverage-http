@@ -91,7 +91,7 @@ jobs:
       - name: Collect coverage with coverport
         run: |
           coverport collect \
-            --url http://127.0.0.1:9095/coverage \
+            --url http://127.0.0.1:53700/coverage \
             --test-name e2e \
             -o ./coverage-output
 

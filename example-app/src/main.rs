@@ -119,7 +119,7 @@ async fn main() {
         .init();
 
     #[cfg(feature = "coverage")]
-    let _coverage_handle = coverage_server::start_coverage_server().await;
+    let _coverage_thread = coverage_server::start_coverage_server_standalone(53700);
 
     let app = Router::new()
         .route("/health", get(health))

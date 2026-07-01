@@ -21,19 +21,18 @@
 //!
 //! ## Usage
 //!
-//! ```rust,no_run
-//! use coverage_server::CoverageServer;
+//! Works with any application — async or synchronous, any runtime:
 //!
-//! #[tokio::main]
-//! async fn main() {
-//!     let server = CoverageServer::new(53700);
-//!     let handle = server.start().await;
-//!     
-//!     // ... run your application ...
-//!     
-//!     handle.await.unwrap();
+//! ```rust,no_run
+//! fn main() {
+//!     // Spawns the coverage server on its own thread with its own tokio runtime.
+//!     // Returns immediately — does not block your app.
+//!     let _handle = coverage_server::start_coverage_server_standalone(53700);
+//!
+//!     // ... rest of your application, any framework, any runtime ...
 //! }
 //! ```
+//!
 
 use axum::{
     http::{HeaderMap, HeaderValue, StatusCode},
@@ -67,7 +66,7 @@ extern "C" {
 /// Disable the LLVM default atexit handler that writes profraw to disk.
 /// This must be called early to ensure no filesystem writes occur,
 /// which is critical for read-only root filesystem environments.
-pub fn disable_profile_atexit_write() {
+fn disable_profile_atexit_write() {
     unsafe {
         let devnull = std::ffi::CString::new("/dev/null").unwrap();
         __llvm_profile_set_filename(devnull.as_ptr());
@@ -128,12 +127,12 @@ fn coverport_headers() -> HeaderMap {
 }
 
 #[derive(Debug, Serialize)]
-pub struct CoverageResponse {
-    pub profraw_filename: String,
-    pub profraw_data: String,
-    pub profraw_size: usize,
-    pub timestamp: u64,
-    pub coverage_enabled: bool,
+struct CoverageResponse {
+    profraw_filename: String,
+    profraw_data: String,
+    profraw_size: usize,
+    timestamp: u64,
+    coverage_enabled: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -141,8 +140,7 @@ struct ErrorResponse {
     error: String,
 }
 
-/// The coverage server that runs alongside your application.
-pub struct CoverageServer {
+struct CoverageServer {
     port: u16,
 }
 
@@ -243,22 +241,19 @@ async fn handle_health() -> impl IntoResponse {
     (StatusCode::OK, headers, "coverage server healthy")
 }
 
-/// Convenience function to start the coverage server with default settings.
-/// Uses port 53700 (coverport standard) or `COVERAGE_PORT` env var.
-/// Intended to be called early in main() for set-and-forget usage.
-pub async fn start_coverage_server() -> JoinHandle<()> {
-    let server = CoverageServer::new(53700);
-    server.start().await
-}
-
-/// Macro to conditionally start the coverage server based on a compile-time feature.
-/// When `coverage` feature is not enabled, this is a no-op.
-#[macro_export]
-macro_rules! maybe_start_coverage_server {
-    () => {
-        #[cfg(feature = "coverage")]
-        {
-            coverage_server::start_coverage_server().await;
-        }
-    };
+/// Start the coverage server on its own background thread with its own tokio runtime.
+/// Works with any application — no async runtime required.
+/// `default_port` is used unless overridden by the `COVERAGE_PORT` env var.
+/// Returns immediately; the server runs until the process exits.
+pub fn start_coverage_server_standalone(default_port: u16) -> std::thread::JoinHandle<()> {
+    let server = CoverageServer::new(default_port);
+    std::thread::spawn(move || {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_io()
+            .build()
+            .expect("failed to create coverage server runtime");
+        rt.block_on(async {
+            server.start().await.await.unwrap();
+        });
+    })
 }

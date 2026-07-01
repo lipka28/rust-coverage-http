@@ -7,5 +7,5 @@ nodes:
         hostPort: 8000
         protocol: TCP
       - containerPort: 30095
-        hostPort: 9095
+        hostPort: 53700
         protocol: TCP
